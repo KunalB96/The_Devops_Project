@@ -1,0 +1,235 @@
+STEP-BY-STEP PROCEDURE ON EC2 INSTANCE
+🟢 STEP 0: Create EC2 Instance (Foundation)
+1️⃣ Launch EC2
+
+AMI: Amazon Linux 2
+
+Instance type: t3.medium (minimum)
+
+Storage: 20–30 GB
+
+Key pair: create/download
+
+2️⃣ Security Group (VERY IMPORTANT)
+
+Open these ports:
+
+Port	Purpose
+22	SSH
+8080	Jenkins
+5000	Flask app (optional)
+80	Kubernetes LoadBalancer
+443	Kubernetes LoadBalancer
+3️⃣ Attach IAM Role to EC2
+
+Attach ONE role with:
+
+AdministratorAccess (learning purpose)
+
+✅ This removes need for AWS keys.
+
+🟢 STEP 1: Connect to EC2
+ssh -i your-key.pem ec2-user@<EC2-PUBLIC-IP>
+
+🟢 STEP 2: Update EC2 & Install Basic Tools
+sudo yum update -y
+sudo yum install git unzip -y
+
+🟢 STEP 3: Install Docker
+sudo yum install docker -y
+sudo systemctl start docker
+sudo systemctl enable docker
+sudo usermod -aG docker ec2-user
+newgrp docker
+
+
+✅ Verify:
+
+docker --version
+docker ps
+
+🟢 STEP 4: Install AWS CLI v2
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+
+
+✅ Verify:
+
+aws --version
+
+🟢 STEP 5: Install kubectl
+curl -LO https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl
+chmod +x kubectl
+sudo mv kubectl /usr/local/bin/
+
+
+✅ Verify:
+
+kubectl version --client
+
+🟢 STEP 6: Install eksctl
+curl -sLO https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_Linux_amd64.tar.gz
+tar -xzf eksctl_Linux_amd64.tar.gz
+sudo mv eksctl /usr/local/bin/
+
+
+✅ Verify:
+
+eksctl version
+
+🟢 STEP 7: Clone the Project Repo
+git clone https://github.com/KunalB96/The_Devops_Project.git
+cd The_Devops_Project
+
+🟢 STEP 8: Build & Run Docker Image
+docker build -t flask-dashboard .
+docker run -d -p 5000:5000 flask-dashboard
+
+
+✅ Test in browser:
+
+http://<EC2-PUBLIC-IP>:5000
+
+🟢 STEP 9: Push Docker Image to DockerHub
+docker login
+docker tag flask-dashboard <dockerhub-username>/flask-dashboard:latest
+docker push <dockerhub-username>/flask-dashboard:latest
+
+🟢 STEP 10: Create EKS Cluster
+
+⚠️ Takes 10–15 minutes
+
+eksctl create cluster \
+  --name devops-cluster \
+  --region us-east-1 \
+  --nodes 2 \
+  --node-type t3.medium
+
+🟢 STEP 11: Connect kubectl to EKS
+aws eks update-kubeconfig \
+  --name devops-cluster \
+  --region us-east-1
+
+
+✅ Verify:
+
+kubectl get nodes
+
+🟢 STEP 12: Deploy App to EKS
+
+Edit Kubernetes manifest:
+
+vi k8s/deployment.yaml
+
+
+Replace image:
+
+image: <dockerhub-username>/flask-dashboard:latest
+
+
+Apply:
+
+kubectl apply -f k8s/
+
+
+Check:
+
+kubectl get pods
+kubectl get svc
+
+🟢 STEP 13: Access Application from EKS
+kubectl get svc
+
+
+Copy EXTERNAL-IP → open in browser.
+
+🟢 STEP 14: Install Jenkins on EC2 (Dockerized)
+docker run -d \
+  --name jenkins \
+  -p 8080:8080 \
+  -p 50000:50000 \
+  -v jenkins_home:/var/jenkins_home \
+  jenkins/jenkins:lts
+
+
+Get admin password:
+
+docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
+
+
+Open:
+
+http://<EC2-PUBLIC-IP>:8080
+
+🟢 STEP 15: Jenkins Configuration
+Install Plugins
+
+Docker Pipeline
+
+Kubernetes CLI
+
+Git
+
+GitHub Integration
+
+Pipeline
+
+Add Credentials
+
+DockerHub credentials
+
+(AWS creds not needed – EC2 IAM role)
+
+🟢 STEP 16: Create Jenkins Pipeline
+
+Jenkinsfile
+
+pipeline {
+  agent any
+
+  environment {
+    IMAGE = "<dockerhub-username>/flask-dashboard:${BUILD_NUMBER}"
+  }
+
+  stages {
+    stage('Clone Repo') {
+      steps {
+        git 'https://github.com/KunalB96/The_Devops_Project.git'
+      }
+    }
+
+    stage('Build Image') {
+      steps {
+        sh 'docker build -t $IMAGE .'
+      }
+    }
+
+    stage('Push Image') {
+      steps {
+        sh 'docker push $IMAGE'
+      }
+    }
+
+    stage('Deploy to EKS') {
+      steps {
+        sh '''
+        aws eks update-kubeconfig --name devops-cluster --region us-east-1
+        kubectl set image deployment/flask-deployment flask=$IMAGE
+        '''
+      }
+    }
+  }
+}
+
+🟢 STEP 17: Trigger Pipeline
+
+✔ Click Build Now
+✔ Or configure GitHub Webhook
+
+🎯 FINAL RESULT
+
+✔ Code pushed → Jenkins triggered
+✔ Docker image built & pushed
+✔ Kubernetes deployment updated
+✔ App live on EKS automatically
